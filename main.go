@@ -1,43 +1,43 @@
 package main
 
 import (
-	"code.google.com/p/goprotobuf/proto"
 	"OSMPBF"
-	"os"
-	"encoding/binary"
-	"io"
 	"bytes"
+	"code.google.com/p/goprotobuf/proto"
 	"compress/zlib"
+	"encoding/binary"
 	"errors"
-	"math"
 	"flag"
+	"io"
+	"math"
+	"os"
 	"runtime"
 )
 
 type blockData struct {
 	blobHeader *OSMPBF.BlobHeader
-	blobData []byte
+	blobData   []byte
 }
 
 type boundingBoxUpdate struct {
 	wayIndex int
-	lon float64
-	lat float64
+	lon      float64
+	lat      float64
 }
 
 type node struct {
-	id int64
-	lon float64
-	lat float64
-	keys []string
+	id     int64
+	lon    float64
+	lat    float64
+	keys   []string
 	values []string
 }
 
 type way struct {
-	id int64
+	id      int64
 	nodeIds []int64
-	keys []string
-	values []string
+	keys    []string
+	values  []string
 }
 
 func readBlock(file io.Reader, size int32) ([]byte, error) {
@@ -64,7 +64,7 @@ func readNextBlobHeader(file *os.File) (*OSMPBF.BlobHeader, error) {
 		return nil, err
 	}
 
-	if blobHeaderSize < 0 || blobHeaderSize > (64 * 1024 * 1024) {
+	if blobHeaderSize < 0 || blobHeaderSize > (64*1024*1024) {
 		return nil, err
 	}
 
@@ -133,7 +133,7 @@ func makePrimitiveBlockReader(file *os.File) chan blockData {
 				os.Exit(3)
 			}
 
-			retval <- blockData{ blobHeader, blobBytes }
+			retval <- blockData{blobHeader, blobBytes}
 		}
 		close(retval)
 	}()
@@ -182,7 +182,7 @@ func findMatchingWaysPass(file *os.File, totalBlobCount int) [][]int64 {
 	}()
 
 	blockDataReader := makePrimitiveBlockReader(file)
-	for i := 0; i < runtime.NumCPU() * 2; i++ {
+	for i := 0; i < runtime.NumCPU()*2; i++ {
 		go func() {
 			for data := range blockDataReader {
 				if *data.blobHeader.Type == "OSMData" {
@@ -228,8 +228,8 @@ func findMatchingWaysPass(file *os.File, totalBlobCount int) [][]int64 {
 	blobCount := 0
 	for _ = range pending {
 		blobCount += 1
-		if blobCount % 500 == 0 {
-			println("\tComplete:", blobCount, "\tRemaining:", totalBlobCount - blobCount)
+		if blobCount%500 == 0 {
+			println("\tComplete:", blobCount, "\tRemaining:", totalBlobCount-blobCount)
 		}
 		if blobCount == totalBlobCount {
 			close(pending)
@@ -242,7 +242,7 @@ func findMatchingWaysPass(file *os.File, totalBlobCount int) [][]int64 {
 	return wayNodeRefs
 }
 
-func calculateLongLat(primitiveBlock *OSMPBF.PrimitiveBlock, rawlon int64, rawlat int64) (float64, float64){
+func calculateLongLat(primitiveBlock *OSMPBF.PrimitiveBlock, rawlon int64, rawlat int64) (float64, float64) {
 	var lonOffset int64 = 0
 	var latOffset int64 = 0
 	var granularity int64 = 100
@@ -256,8 +256,8 @@ func calculateLongLat(primitiveBlock *OSMPBF.PrimitiveBlock, rawlon int64, rawla
 		granularity = int64(*primitiveBlock.Granularity)
 	}
 
-	lon := .000000001 * float64(lonOffset + (granularity * rawlon))
-	lat := .000000001 * float64(latOffset + (granularity * rawlat))
+	lon := .000000001 * float64(lonOffset+(granularity*rawlon))
+	lat := .000000001 * float64(latOffset+(granularity*rawlat))
 
 	return lon, lat
 }
@@ -277,7 +277,7 @@ func isInBoundingBoxes(boundingBoxes [][]float64, lon float64, lat float64) bool
 func calculateBoundingBoxesPass(file *os.File, wayNodeRefs [][]int64, totalBlobCount int) [][]float64 {
 
 	// maps node ids to wayNodeRef indexes
-	nodeOwners := make(map[int64][]int, len(wayNodeRefs) * 4)
+	nodeOwners := make(map[int64][]int, len(wayNodeRefs)*4)
 	for wayIndex, way := range wayNodeRefs {
 		for _, nodeId := range way {
 			if nodeOwners[nodeId] == nil {
@@ -314,7 +314,7 @@ func calculateBoundingBoxesPass(file *os.File, wayNodeRefs [][]int64, totalBlobC
 	}()
 
 	blockDataReader := makePrimitiveBlockReader(file)
-	for i := 0; i < runtime.NumCPU() * 2; i++ {
+	for i := 0; i < runtime.NumCPU()*2; i++ {
 		go func() {
 			for data := range blockDataReader {
 				if *data.blobHeader.Type == "OSMData" {
@@ -339,7 +339,7 @@ func calculateBoundingBoxesPass(file *os.File, wayNodeRefs [][]int64, totalBlobC
 							}
 							lon, lat := calculateLongLat(primitiveBlock, *node.Lon, *node.Lat)
 							for _, wayIndex := range owners {
-								updateWayBoundingBoxes <- boundingBoxUpdate{ wayIndex, lon, lat }
+								updateWayBoundingBoxes <- boundingBoxUpdate{wayIndex, lon, lat}
 							}
 						}
 
@@ -363,7 +363,7 @@ func calculateBoundingBoxesPass(file *os.File, wayNodeRefs [][]int64, totalBlobC
 								}
 								lon, lat := calculateLongLat(primitiveBlock, rawlon, rawlat)
 								for _, wayIndex := range owners {
-									updateWayBoundingBoxes <- boundingBoxUpdate{ wayIndex, lon, lat }
+									updateWayBoundingBoxes <- boundingBoxUpdate{wayIndex, lon, lat}
 								}
 							}
 						}
@@ -378,8 +378,8 @@ func calculateBoundingBoxesPass(file *os.File, wayNodeRefs [][]int64, totalBlobC
 	blobCount := 0
 	for _ = range pending {
 		blobCount += 1
-		if blobCount % 500 == 0 {
-			println("\tComplete:", blobCount, "\tRemaining:", totalBlobCount - blobCount)
+		if blobCount%500 == 0 {
+			println("\tComplete:", blobCount, "\tRemaining:", totalBlobCount-blobCount)
 		}
 		if blobCount == totalBlobCount {
 			close(pending)
@@ -392,7 +392,7 @@ func calculateBoundingBoxesPass(file *os.File, wayNodeRefs [][]int64, totalBlobC
 	return wayBoundingBoxes
 }
 
-func findNodesWithinBoundingBoxesPass(file *os.File, boundingBoxes[][]float64, totalBlobCount int) []node {
+func findNodesWithinBoundingBoxesPass(file *os.File, boundingBoxes [][]float64, totalBlobCount int) []node {
 	retvalNodes := make([]node, 0, 100000)
 	pending := make(chan bool)
 
@@ -407,7 +407,7 @@ func findNodesWithinBoundingBoxesPass(file *os.File, boundingBoxes[][]float64, t
 	}()
 
 	blockDataReader := makePrimitiveBlockReader(file)
-	for i := 0; i < runtime.NumCPU() * 2; i++ {
+	for i := 0; i < runtime.NumCPU()*2; i++ {
 		go func() {
 			for data := range blockDataReader {
 				if *data.blobHeader.Type == "OSMData" {
@@ -486,8 +486,8 @@ func findNodesWithinBoundingBoxesPass(file *os.File, boundingBoxes[][]float64, t
 									keys := make([]string, numItems)
 									vals := make([]string, numItems)
 									for i := 0; i < numItems; i++ {
-										keys[i] = string(primitiveBlock.Stringtable.S[primitiveGroup.Dense.KeysVals[startKeyValIndex + (i * 2)]])
-										vals[i] = string(primitiveBlock.Stringtable.S[primitiveGroup.Dense.KeysVals[startKeyValIndex + (i * 2) + 1]])
+										keys[i] = string(primitiveBlock.Stringtable.S[primitiveGroup.Dense.KeysVals[startKeyValIndex+(i*2)]])
+										vals[i] = string(primitiveBlock.Stringtable.S[primitiveGroup.Dense.KeysVals[startKeyValIndex+(i*2)+1]])
 									}
 
 									node := node{
@@ -514,8 +514,8 @@ func findNodesWithinBoundingBoxesPass(file *os.File, boundingBoxes[][]float64, t
 	blobCount := 0
 	for _ = range pending {
 		blobCount += 1
-		if blobCount % 500 == 0 {
-			println("\tComplete:", blobCount, "\tRemaining:", totalBlobCount - blobCount)
+		if blobCount%500 == 0 {
+			println("\tComplete:", blobCount, "\tRemaining:", totalBlobCount-blobCount)
 		}
 		if blobCount == totalBlobCount {
 			close(pending)
@@ -548,7 +548,7 @@ func findWaysUsingNodesPass(file *os.File, nodes []node, totalBlobCount int) []w
 	}()
 
 	blockDataReader := makePrimitiveBlockReader(file)
-	for i := 0; i < runtime.NumCPU() * 2; i++ {
+	for i := 0; i < runtime.NumCPU()*2; i++ {
 		go func() {
 			for data := range blockDataReader {
 				if *data.blobHeader.Type == "OSMData" {
@@ -617,8 +617,8 @@ func findWaysUsingNodesPass(file *os.File, nodes []node, totalBlobCount int) []w
 	blobCount := 0
 	for _ = range pending {
 		blobCount += 1
-		if blobCount % 500 == 0 {
-			println("\tComplete:", blobCount, "\tRemaining:", totalBlobCount - blobCount)
+		if blobCount%500 == 0 {
+			println("\tComplete:", blobCount, "\tRemaining:", totalBlobCount-blobCount)
 		}
 		if blobCount == totalBlobCount {
 			close(pending)
@@ -679,7 +679,7 @@ func writeHeader(file *os.File) error {
 	writingProgram := "go thingy"
 	header := OSMPBF.HeaderBlock{}
 	header.Writingprogram = &writingProgram
-	header.RequiredFeatures = []string{ "OsmSchema-V0.6" }
+	header.RequiredFeatures = []string{"OsmSchema-V0.6"}
 	return writeBlock(file, &header, "OSMHeader")
 }
 
@@ -688,7 +688,7 @@ func writeNodes(file *os.File, nodes []node) error {
 		return nil
 	}
 
-	for nodeGroupIndex := 0; nodeGroupIndex < (len(nodes) / 8000) + 1; nodeGroupIndex++ {
+	for nodeGroupIndex := 0; nodeGroupIndex < (len(nodes)/8000)+1; nodeGroupIndex++ {
 		beg := (nodeGroupIndex + 0) * 8000
 		end := (nodeGroupIndex + 1) * 8000
 		if len(nodes) < end {
@@ -724,8 +724,8 @@ func writeNodes(file *os.File, nodes []node) error {
 			var nodeId int64 = node.id
 			osmNode.Id = &nodeId
 
-			var rawlon int64 = int64(node.lon / .000000001) / 100
-			var rawlat int64 = int64(node.lat / .000000001) / 100
+			var rawlon int64 = int64(node.lon/.000000001) / 100
+			var rawlat int64 = int64(node.lat/.000000001) / 100
 			osmNode.Lon = &rawlon
 			osmNode.Lat = &rawlat
 
@@ -744,8 +744,8 @@ func writeNodes(file *os.File, nodes []node) error {
 		group.Nodes = osmNodes
 
 		block := OSMPBF.PrimitiveBlock{}
-		block.Stringtable = &OSMPBF.StringTable { stringTable, nil }
-		block.Primitivegroup = []*OSMPBF.PrimitiveGroup{ &group }
+		block.Stringtable = &OSMPBF.StringTable{stringTable, nil}
+		block.Primitivegroup = []*OSMPBF.PrimitiveGroup{&group}
 		err := writeBlock(file, &block, "OSMData")
 		if err != nil {
 			return err
@@ -760,7 +760,7 @@ func writeWays(file *os.File, ways []way) error {
 		return nil
 	}
 
-	for wayGroupIndex := 0; wayGroupIndex < (len(ways) / 8000) + 1; wayGroupIndex++ {
+	for wayGroupIndex := 0; wayGroupIndex < (len(ways)/8000)+1; wayGroupIndex++ {
 		beg := (wayGroupIndex + 0) * 8000
 		end := (wayGroupIndex + 1) * 8000
 		if len(ways) < end {
@@ -799,7 +799,7 @@ func writeWays(file *os.File, ways []way) error {
 			// delta-encode the node ids
 			nodeRefs := make([]int64, len(way.nodeIds))
 			var prevNodeId int64 = 0
-			for i, nodeId := range(way.nodeIds) {
+			for i, nodeId := range way.nodeIds {
 				nodeIdDelta := nodeId - prevNodeId
 				prevNodeId = nodeId
 				nodeRefs[i] = nodeIdDelta
@@ -821,8 +821,8 @@ func writeWays(file *os.File, ways []way) error {
 		group.Ways = osmWays
 
 		block := OSMPBF.PrimitiveBlock{}
-		block.Stringtable = &OSMPBF.StringTable { stringTable, nil }
-		block.Primitivegroup = []*OSMPBF.PrimitiveGroup{ &group }
+		block.Stringtable = &OSMPBF.StringTable{stringTable, nil}
+		block.Primitivegroup = []*OSMPBF.PrimitiveGroup{&group}
 		err := writeBlock(file, &block, "OSMData")
 		if err != nil {
 			return err
@@ -879,7 +879,7 @@ func main() {
 	ways := findWaysUsingNodesPass(file, nodes, totalBlobCount)
 	println("Pass 5/5: Complete;", len(ways), "ways located.")
 
-	output, err := os.OpenFile("output.osm.pbf", os.O_CREATE | os.O_WRONLY | os.O_TRUNC, 0664)
+	output, err := os.OpenFile("output.osm.pbf", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0664)
 	if err != nil {
 		println("Output file write error:", err.Error())
 		os.Exit(2)
@@ -912,4 +912,3 @@ func main() {
 		os.Exit(2)
 	}
 }
-
