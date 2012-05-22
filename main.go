@@ -184,7 +184,7 @@ func supportedFilePass(file *os.File) {
 	}
 }
 
-func findMatchingWaysPass(file *os.File, totalBlobCount int) [][]int64 {
+func findMatchingWaysPass(file *os.File, filterTag string, filterValue string, totalBlobCount int) [][]int64 {
 	wayNodeRefs := make([][]int64, 0, 100)
 	pending := make(chan bool)
 
@@ -222,7 +222,7 @@ func findMatchingWaysPass(file *os.File, totalBlobCount int) [][]int64 {
 								valueIndex := way.Vals[i]
 								key := string(primitiveBlock.Stringtable.S[keyIndex])
 								value := string(primitiveBlock.Stringtable.S[valueIndex])
-								if key == "leisure" && value == "golf_course" {
+								if key == filterTag && value == filterValue {
 									var nodeRefs = make([]int64, len(way.Refs))
 									var prevNodeId int64 = 0
 									for index, deltaNodeId := range way.Refs {
@@ -855,6 +855,8 @@ func main() {
 	inputFile := flag.String("i", "input.pbf.osm", "input OSM PBF file")
 	outputFile := flag.String("o", "output.pbf.osm", "output OSM PBF file")
 	highMemory := flag.Bool("high-memory", false, "use higher amounts of memory for higher performance")
+	filterTag := flag.String("t", "leisure", "tag to filter ways based upon")
+	filterValue := flag.String("v", "golf_course", "value to ensure that the way's tag is set to")
 	flag.Parse()
 
 	file, err := os.Open(*inputFile)
@@ -888,7 +890,7 @@ func main() {
 	println("Pass 1/5: Complete")
 
 	println("Pass 2/5: Find node references of matching areas")
-	wayNodeRefs := findMatchingWaysPass(file, totalBlobCount)
+	wayNodeRefs := findMatchingWaysPass(file, *filterTag, *filterValue, totalBlobCount)
 	println("Pass 2/5: Complete;", len(wayNodeRefs), "matching ways found.")
 
 	println("Pass 3/5: Establish bounding boxes")
