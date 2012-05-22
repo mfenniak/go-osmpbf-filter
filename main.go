@@ -835,9 +835,11 @@ func writeWays(file *os.File, ways []way) error {
 func main() {
 	runtime.GOMAXPROCS(runtime.NumCPU() * 2)
 
+	inputFile := flag.String("i", "input.pbf.osm", "input OSM PBF file")
+	outputFile := flag.String("o", "output.pbf.osm", "output OSM PBF file")
 	flag.Parse()
-	fname := flag.Arg(0)
-	file, err := os.Open(fname)
+
+	file, err := os.Open(*inputFile)
 	if err != nil {
 		println("Unable to open file:", err.Error())
 		os.Exit(1)
@@ -879,7 +881,7 @@ func main() {
 	ways := findWaysUsingNodesPass(file, nodes, totalBlobCount)
 	println("Pass 5/5: Complete;", len(ways), "ways located.")
 
-	output, err := os.OpenFile("output.osm.pbf", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0664)
+	output, err := os.OpenFile(*outputFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0664)
 	if err != nil {
 		println("Output file write error:", err.Error())
 		os.Exit(2)
