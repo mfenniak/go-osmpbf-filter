@@ -14,9 +14,12 @@ import (
 	"runtime"
 )
 
+var cacheUncompressedBlobs map[int64][]byte
+
 type blockData struct {
-	blobHeader *OSMPBF.BlobHeader
-	blobData   []byte
+	blobHeader   *OSMPBF.BlobHeader
+	blobData     []byte
+	filePosition int64
 }
 
 type boundingBoxUpdate struct {
@@ -83,13 +86,21 @@ func readNextBlobHeader(file *os.File) (*OSMPBF.BlobHeader, error) {
 }
 
 func decodeBlob(data blockData) ([]byte, error) {
+	var blobContent []byte
+
+	if cacheUncompressedBlobs != nil {
+		blobContent = cacheUncompressedBlobs[data.filePosition]
+		if blobContent != nil {
+			return blobContent, nil
+		}
+	}
+
 	blob := &OSMPBF.Blob{}
 	err := proto.Unmarshal(data.blobData, blob)
 	if err != nil {
 		return nil, err
 	}
 
-	var blobContent []byte
 	if blob.Raw != nil {
 		blobContent = blob.Raw
 	} else if blob.ZlibData != nil {
@@ -110,6 +121,10 @@ func decodeBlob(data blockData) ([]byte, error) {
 		return nil, errors.New("Unsupported blob storage")
 	}
 
+	if cacheUncompressedBlobs != nil {
+		cacheUncompressedBlobs[data.filePosition] = blobContent
+	}
+
 	return blobContent, nil
 }
 
@@ -117,8 +132,10 @@ func makePrimitiveBlockReader(file *os.File) chan blockData {
 	retval := make(chan blockData)
 
 	go func() {
-		file.Seek(0, 0)
+		file.Seek(0, os.SEEK_SET)
 		for {
+			filePosition, err := file.Seek(0, os.SEEK_CUR)
+
 			blobHeader, err := readNextBlobHeader(file)
 			if err == io.EOF {
 				break
@@ -133,7 +150,7 @@ func makePrimitiveBlockReader(file *os.File) chan blockData {
 				os.Exit(3)
 			}
 
-			retval <- blockData{blobHeader, blobBytes}
+			retval <- blockData{blobHeader, blobBytes, filePosition}
 		}
 		close(retval)
 	}()
@@ -837,6 +854,7 @@ func main() {
 
 	inputFile := flag.String("i", "input.pbf.osm", "input OSM PBF file")
 	outputFile := flag.String("o", "output.pbf.osm", "output OSM PBF file")
+	highMemory := flag.Bool("high-memory", false, "use higher amounts of memory for higher performance")
 	flag.Parse()
 
 	file, err := os.Open(*inputFile)
@@ -857,9 +875,13 @@ func main() {
 		}
 
 		totalBlobCount += 1
-		file.Seek(int64(*blobHeader.Datasize), 1)
+		file.Seek(int64(*blobHeader.Datasize), os.SEEK_CUR)
 	}
 	println("Total number of blobs:", totalBlobCount)
+
+	if *highMemory {
+		cacheUncompressedBlobs = make(map[int64][]byte, totalBlobCount)
+	}
 
 	println("Pass 1/5: Find OSMHeaders")
 	supportedFilePass(file)
