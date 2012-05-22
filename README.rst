@@ -28,6 +28,15 @@ i7 processor.
 .. _Go: http://golang.org/
 
 
+Building
+========
+
+Building go-osmpbf-filter is easy::
+
+    cd go-osmpbf-filter
+    GOPATH=`pwd` go build
+
+
 Examples
 ========
 
