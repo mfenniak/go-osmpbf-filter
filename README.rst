@@ -2,8 +2,8 @@ go-osmpbf-filter
 ----------------
 
 go-osmpbf-filter is a program to filter OpenStreetMap PBF format data files.
-The filter performs five passes on the input PBF filter, and then writes a new
-output PBF file.  The five passes are:
+The filter performs six passes on the input PBF filter, and then writes a new
+output PBF file.  The six passes are:
 
 1. Find the OSMHeaders data block and ensure that we support reading this
    file.
@@ -17,8 +17,10 @@ output PBF file.  The five passes are:
 
 5. Find all the ways that reference nodes found in (4).
 
-The nodes and ways collected in pass (4) and (5) are then output into a new PBF
-format data file.
+6. Find all the nodes that are referenced by the ways found in (5).
+
+The nodes and ways collected in passes (3), (4) and (5) are then output into a
+new PBF format data file.
 
 go-osmpbf-filter is written in Go_.  It is highly concurrent, so you can
 expect it to use up all your CPU power.  go-osmpbf-filter can filter out 1MB of

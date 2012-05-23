@@ -666,6 +666,155 @@ func findWaysUsingNodesPass(file *os.File, nodes []node, totalBlobCount int) []w
 	return ways
 }
 
+func findNodesReferencedByWaysPass(file *os.File, ways []way, nodes []node, totalBlobCount int) []node {
+	pending := make(chan bool)
+
+	NODE_REFERENCED := 1
+	NODE_STORED := 2
+
+	nodeSet := make(map[int64]int, len(nodes))
+
+	for _, way := range ways {
+		for _, nodeId := range way.nodeIds {
+			nodeSet[nodeId] = NODE_REFERENCED
+		}
+	}
+
+	for _, node := range nodes {
+		nodeSet[node.id] = NODE_STORED
+	}
+
+	appendNode := make(chan node)
+	appendNodeComplete := make(chan bool)
+
+	go func() {
+		for node := range appendNode {
+			nodeSet[node.id] = NODE_STORED
+			nodes = append(nodes, node)
+		}
+		appendNodeComplete <- true
+	}()
+
+	blockDataReader := makePrimitiveBlockReader(file)
+	for i := 0; i < runtime.NumCPU()*2; i++ {
+		go func() {
+			for data := range blockDataReader {
+				if *data.blobHeader.Type == "OSMData" {
+					blockBytes, err := decodeBlob(data)
+					if err != nil {
+						println("OSMData decode error:", err.Error())
+						os.Exit(6)
+					}
+
+					primitiveBlock := &OSMPBF.PrimitiveBlock{}
+					err = proto.Unmarshal(blockBytes, primitiveBlock)
+					if err != nil {
+						println("OSMData decode error:", err.Error())
+						os.Exit(6)
+					}
+
+					for _, primitiveGroup := range primitiveBlock.Primitivegroup {
+						for _, osmNode := range primitiveGroup.Nodes {
+							if nodeSet[*osmNode.Id] == NODE_REFERENCED {
+								lon, lat := calculateLongLat(primitiveBlock, *osmNode.Lon, *osmNode.Lat)
+								keys := make([]string, len(osmNode.Keys))
+								vals := make([]string, len(osmNode.Keys))
+								for i, keyIndex := range osmNode.Keys {
+									valueIndex := osmNode.Vals[i]
+									keys[i] = string(primitiveBlock.Stringtable.S[keyIndex])
+									vals[i] = string(primitiveBlock.Stringtable.S[valueIndex])
+								}
+
+								node := node{
+									*osmNode.Id,
+									lon,
+									lat,
+									keys,
+									vals,
+								}
+								appendNode <- node
+							}
+						}
+
+						if primitiveGroup.Dense != nil {
+							var prevNodeId int64 = 0
+							var prevLat int64 = 0
+							var prevLon int64 = 0
+							keyValIndex := 0
+
+							for idx, deltaNodeId := range primitiveGroup.Dense.Id {
+								nodeId := prevNodeId + deltaNodeId
+								rawlon := prevLon + primitiveGroup.Dense.Lon[idx]
+								rawlat := prevLat + primitiveGroup.Dense.Lat[idx]
+
+								prevNodeId = nodeId
+								prevLon = rawlon
+								prevLat = rawlat
+
+								startKeyValIndex := 0
+
+								// Not sure why KeysVals can be length zero, this
+								// doesn't seem to be documented, but I'll assume that
+								// means none of the nodes have data associated with
+								// them.
+								if len(primitiveGroup.Dense.KeysVals) != 0 {
+									startKeyValIndex = keyValIndex
+									for primitiveGroup.Dense.KeysVals[keyValIndex] != 0 {
+										keyValIndex += 2
+									}
+								}
+
+								if nodeSet[nodeId] == NODE_REFERENCED {
+									lon, lat := calculateLongLat(primitiveBlock, rawlon, rawlat)
+									numItems := 0
+									if len(primitiveGroup.Dense.KeysVals) != 0 {
+										numItems = (keyValIndex - startKeyValIndex) / 2
+									}
+									keys := make([]string, numItems)
+									vals := make([]string, numItems)
+									for i := 0; i < numItems; i++ {
+										keys[i] = string(primitiveBlock.Stringtable.S[primitiveGroup.Dense.KeysVals[startKeyValIndex+(i*2)]])
+										vals[i] = string(primitiveBlock.Stringtable.S[primitiveGroup.Dense.KeysVals[startKeyValIndex+(i*2)+1]])
+									}
+
+									node := node{
+										nodeId,
+										lon,
+										lat,
+										keys,
+										vals,
+									}
+									appendNode <- node
+								}
+
+								keyValIndex += 1
+							}
+						}
+					}
+				}
+
+				pending <- true
+			}
+		}()
+	}
+
+	blobCount := 0
+	for _ = range pending {
+		blobCount += 1
+		if blobCount%500 == 0 {
+			println("\tComplete:", blobCount, "\tRemaining:", totalBlobCount-blobCount)
+		}
+		if blobCount == totalBlobCount {
+			close(pending)
+			close(appendNode)
+			<-appendNodeComplete
+			close(appendNodeComplete)
+		}
+	}
+
+	return nodes
+}
+
 func writeBlock(file *os.File, block interface{}, blockType string) error {
 	blobContent, err := proto.Marshal(block)
 	if err != nil {
@@ -903,25 +1052,29 @@ func main() {
 		cacheUncompressedBlobs = make(map[int64][]byte, totalBlobCount)
 	}
 
-	println("Pass 1/5: Find OSMHeaders")
+	println("Pass 1/6: Find OSMHeaders")
 	supportedFilePass(file)
-	println("Pass 1/5: Complete")
+	println("Pass 1/6: Complete")
 
-	println("Pass 2/5: Find node references of matching areas")
+	println("Pass 2/6: Find node references of matching areas")
 	wayNodeRefs := findMatchingWaysPass(file, *filterTag, *filterValue, totalBlobCount)
-	println("Pass 2/5: Complete;", len(wayNodeRefs), "matching ways found.")
+	println("Pass 2/6: Complete;", len(wayNodeRefs), "matching ways found.")
 
-	println("Pass 3/5: Establish bounding boxes")
+	println("Pass 3/6: Establish bounding boxes")
 	boundingBoxes := calculateBoundingBoxesPass(file, wayNodeRefs, totalBlobCount)
-	println("Pass 3/5: Complete;", len(boundingBoxes), "bounding boxes calculated.")
+	println("Pass 3/6: Complete;", len(boundingBoxes), "bounding boxes calculated.")
 
-	println("Pass 4/5: Find nodes within bounding boxes")
+	println("Pass 4/6: Find nodes within bounding boxes")
 	nodes := findNodesWithinBoundingBoxesPass(file, boundingBoxes, totalBlobCount)
-	println("Pass 4/5: Complete;", len(nodes), "nodes located.")
+	println("Pass 4/6: Complete;", len(nodes), "nodes located.")
 
-	println("Pass 5/5: Find ways using intersecting nodes")
+	println("Pass 5/6: Find ways using intersecting nodes")
 	ways := findWaysUsingNodesPass(file, nodes, totalBlobCount)
-	println("Pass 5/5: Complete;", len(ways), "ways located.")
+	println("Pass 5/6: Complete;", len(ways), "ways located.")
+
+	println("Pass 6/6: Find nodes referenced by intersected ways")
+	nodes = findNodesReferencedByWaysPass(file, ways, nodes, totalBlobCount)
+	println("Pass 6/6: Complete;", len(nodes), "total nodes (pass 4 + pass 6) located.")
 
 	output, err := os.OpenFile(*outputFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0664)
 	if err != nil {
