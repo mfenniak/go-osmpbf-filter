@@ -823,8 +823,13 @@ func writeBlock(file *os.File, block interface{}, blockType string) error {
 
 	var blobContentLength int32 = int32(len(blobContent))
 
+	var compressedBlob bytes.Buffer
+	zlibWriter := zlib.NewWriter(&compressedBlob)
+	zlibWriter.Write(blobContent)
+	zlibWriter.Close()
+
 	blob := OSMPBF.Blob{}
-	blob.Raw = blobContent
+	blob.ZlibData = compressedBlob.Bytes()
 	blob.RawSize = &blobContentLength
 	blobBytes, err := proto.Marshal(&blob)
 	if err != nil {
