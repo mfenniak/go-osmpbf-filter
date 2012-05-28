@@ -20,25 +20,13 @@ package main
 
 import (
 	"OSMPBF"
-	"bytes"
 	"code.google.com/p/goprotobuf/proto"
-	"compress/zlib"
-	"encoding/binary"
-	"errors"
 	"flag"
 	"io"
 	"math"
 	"os"
 	"runtime"
 )
-
-var cacheUncompressedBlobs map[int64][]byte
-
-type blockData struct {
-	blobHeader   *OSMPBF.BlobHeader
-	blobData     []byte
-	filePosition int64
-}
 
 type boundingBoxUpdate struct {
 	wayIndex int
@@ -61,265 +49,10 @@ type way struct {
 	values  []string
 }
 
-type OsmNodeAbstraction interface {
-	GetNodeId() int64
-	GetLonLat() (float64, float64)
-	GetKeyValues() ([]string, []string)
-}
-
-type sparseOsmNode struct {
-	osmPrimitiveBlock *OSMPBF.PrimitiveBlock
-	osmNode           *OSMPBF.Node
-}
-
-type denseOsmNode struct {
-	osmPrimitiveBlock  *OSMPBF.PrimitiveBlock
-	osmDenseNodes      *OSMPBF.DenseNodes
-	nodeId             int64
-	rawLon             int64
-	rawLat             int64
-	startKeyValueIndex int
-	endKeyValueIndex   int
-}
-
-func calculateLonLat(primitiveBlock *OSMPBF.PrimitiveBlock, rawlon int64, rawlat int64) (float64, float64) {
-	var lonOffset int64 = 0
-	var latOffset int64 = 0
-	var granularity int64 = 100
-	if primitiveBlock.LonOffset != nil {
-		lonOffset = *primitiveBlock.LonOffset
-	}
-	if primitiveBlock.LatOffset != nil {
-		latOffset = *primitiveBlock.LatOffset
-	}
-	if primitiveBlock.Granularity != nil {
-		granularity = int64(*primitiveBlock.Granularity)
-	}
-
-	lon := .000000001 * float64(lonOffset+(granularity*rawlon))
-	lat := .000000001 * float64(latOffset+(granularity*rawlat))
-
-	return lon, lat
-}
-
-func NewSparseOsmNode(osmPrimitiveBlock *OSMPBF.PrimitiveBlock, osmNode *OSMPBF.Node) OsmNodeAbstraction {
-	return &sparseOsmNode{osmPrimitiveBlock, osmNode}
-}
-
-func (node *sparseOsmNode) GetNodeId() int64 {
-	return *node.osmNode.Id
-}
-
-func (node *sparseOsmNode) GetLonLat() (float64, float64) {
-	return calculateLonLat(node.osmPrimitiveBlock, *node.osmNode.Lon, *node.osmNode.Lat)
-}
-
-func (node *sparseOsmNode) GetKeyValues() ([]string, []string) {
-	keys := make([]string, len(node.osmNode.Keys))
-	vals := make([]string, len(node.osmNode.Keys))
-	for i, keyIndex := range node.osmNode.Keys {
-		valueIndex := node.osmNode.Vals[i]
-		keys[i] = string(node.osmPrimitiveBlock.Stringtable.S[keyIndex])
-		vals[i] = string(node.osmPrimitiveBlock.Stringtable.S[valueIndex])
-	}
-	return keys, vals
-}
-
-func NewDenseOsmNode(osmPrimitiveBlock *OSMPBF.PrimitiveBlock, osmDenseNodes *OSMPBF.DenseNodes, nodeId int64, rawLon int64, rawLat int64, startKeyValIndex int, endKeyValIndex int) OsmNodeAbstraction {
-	return &denseOsmNode{osmPrimitiveBlock, osmDenseNodes, nodeId, rawLon, rawLat, startKeyValIndex, endKeyValIndex}
-}
-
-func (node *denseOsmNode) GetNodeId() int64 {
-	return node.nodeId
-}
-
-func (node *denseOsmNode) GetLonLat() (float64, float64) {
-	return calculateLonLat(node.osmPrimitiveBlock, node.rawLon, node.rawLat)
-}
-
-func (node *denseOsmNode) GetKeyValues() ([]string, []string) {
-	numItems := 0
-	if len(node.osmDenseNodes.KeysVals) != 0 {
-		numItems = (node.endKeyValueIndex - node.startKeyValueIndex) / 2
-	}
-	keys := make([]string, numItems)
-	vals := make([]string, numItems)
-	for i := 0; i < numItems; i++ {
-		keys[i] = string(node.osmPrimitiveBlock.Stringtable.S[node.osmDenseNodes.KeysVals[node.startKeyValueIndex+(i*2)]])
-		vals[i] = string(node.osmPrimitiveBlock.Stringtable.S[node.osmDenseNodes.KeysVals[node.startKeyValueIndex+(i*2)+1]])
-	}
-	return keys, vals
-}
-
-func readBlock(file io.Reader, size int32) ([]byte, error) {
-	buffer := make([]byte, size)
-	var idx int32 = 0
-	for {
-		cnt, err := file.Read(buffer[idx:])
-		if err != nil {
-			return nil, err
-		}
-		idx += int32(cnt)
-		if idx == size {
-			break
-		}
-	}
-	return buffer, nil
-}
-
-func readNextBlobHeader(file *os.File) (*OSMPBF.BlobHeader, error) {
-	var blobHeaderSize int32
-
-	err := binary.Read(file, binary.BigEndian, &blobHeaderSize)
-	if err != nil {
-		return nil, err
-	}
-
-	if blobHeaderSize < 0 || blobHeaderSize > (64*1024*1024) {
-		return nil, err
-	}
-
-	blobHeaderBytes, err := readBlock(file, blobHeaderSize)
-	if err != nil {
-		return nil, err
-	}
-
-	blobHeader := &OSMPBF.BlobHeader{}
-	err = proto.Unmarshal(blobHeaderBytes, blobHeader)
-	if err != nil {
-		return nil, err
-	}
-
-	return blobHeader, nil
-}
-
-func decodeBlob(data blockData) ([]byte, error) {
-	var blobContent []byte
-
-	if cacheUncompressedBlobs != nil {
-		blobContent = cacheUncompressedBlobs[data.filePosition]
-		if blobContent != nil {
-			return blobContent, nil
-		}
-	}
-
-	blob := &OSMPBF.Blob{}
-	err := proto.Unmarshal(data.blobData, blob)
-	if err != nil {
-		return nil, err
-	}
-
-	if blob.Raw != nil {
-		blobContent = blob.Raw
-	} else if blob.ZlibData != nil {
-		if blob.RawSize == nil {
-			return nil, errors.New("decompressed size is required but not provided")
-		}
-		zlibBuffer := bytes.NewBuffer(blob.ZlibData)
-		zlibReader, err := zlib.NewReader(zlibBuffer)
-		if err != nil {
-			return nil, err
-		}
-		blobContent, err = readBlock(zlibReader, *blob.RawSize)
-		if err != nil {
-			return nil, err
-		}
-		zlibReader.Close()
-	} else {
-		return nil, errors.New("Unsupported blob storage")
-	}
-
-	if cacheUncompressedBlobs != nil {
-		cacheUncompressedBlobs[data.filePosition] = blobContent
-	}
-
-	return blobContent, nil
-}
-
-func makePrimitiveBlockReader(file *os.File) <-chan blockData {
-	retval := make(chan blockData)
-
-	go func() {
-		file.Seek(0, os.SEEK_SET)
-		for {
-			filePosition, err := file.Seek(0, os.SEEK_CUR)
-
-			blobHeader, err := readNextBlobHeader(file)
-			if err == io.EOF {
-				break
-			} else if err != nil {
-				println("Blob header read error:", err.Error())
-				os.Exit(2)
-			}
-
-			blobBytes, err := readBlock(file, *blobHeader.Datasize)
-			if err != nil {
-				println("Blob read error:", err.Error())
-				os.Exit(3)
-			}
-
-			retval <- blockData{blobHeader, blobBytes, filePosition}
-		}
-		close(retval)
-	}()
-
-	return retval
-}
-
-func makeNodeReader(primitiveBlock *OSMPBF.PrimitiveBlock) <-chan OsmNodeAbstraction {
-	retval := make(chan OsmNodeAbstraction)
-
-	go func() {
-		for _, primitiveGroup := range primitiveBlock.Primitivegroup {
-			for _, osmNode := range primitiveGroup.Nodes {
-				retval <- NewSparseOsmNode(primitiveBlock, osmNode)
-			}
-
-			if primitiveGroup.Dense != nil {
-				var prevNodeId int64 = 0
-				var prevLat int64 = 0
-				var prevLon int64 = 0
-				keyValIndex := 0
-
-				for idx, deltaNodeId := range primitiveGroup.Dense.Id {
-					nodeId := prevNodeId + deltaNodeId
-					rawlon := prevLon + primitiveGroup.Dense.Lon[idx]
-					rawlat := prevLat + primitiveGroup.Dense.Lat[idx]
-
-					prevNodeId = nodeId
-					prevLon = rawlon
-					prevLat = rawlat
-
-					startKeyValIndex := 0
-
-					// Not sure why KeysVals can be length zero, this
-					// doesn't seem to be documented, but I'll assume that
-					// means none of the nodes have data associated with
-					// them.
-					if len(primitiveGroup.Dense.KeysVals) != 0 {
-						startKeyValIndex = keyValIndex
-						for primitiveGroup.Dense.KeysVals[keyValIndex] != 0 {
-							keyValIndex += 2
-						}
-					}
-
-					retval <- NewDenseOsmNode(primitiveBlock, primitiveGroup.Dense, nodeId, rawlon, rawlat, startKeyValIndex, keyValIndex)
-
-					keyValIndex += 1
-				}
-			}
-		}
-
-		close(retval)
-	}()
-
-	return retval
-}
-
 func supportedFilePass(file *os.File) {
-	for data := range makePrimitiveBlockReader(file) {
+	for data := range MakePrimitiveBlockReader(file) {
 		if *data.blobHeader.Type == "OSMHeader" {
-			blockBytes, err := decodeBlob(data)
+			blockBytes, err := DecodeBlob(data)
 			if err != nil {
 				println("OSMHeader blob read error:", err.Error())
 				os.Exit(5)
@@ -356,12 +89,12 @@ func findMatchingWaysPass(file *os.File, filterTag string, filterValue string, t
 		appendNodeRefsComplete <- true
 	}()
 
-	blockDataReader := makePrimitiveBlockReader(file)
+	blockDataReader := MakePrimitiveBlockReader(file)
 	for i := 0; i < runtime.NumCPU()*2; i++ {
 		go func() {
 			for data := range blockDataReader {
 				if *data.blobHeader.Type == "OSMData" {
-					blockBytes, err := decodeBlob(data)
+					blockBytes, err := DecodeBlob(data)
 					if err != nil {
 						println("OSMData decode error:", err.Error())
 						os.Exit(6)
@@ -430,7 +163,6 @@ func isInBoundingBoxes(boundingBoxes [][]float64, lon float64, lat float64) bool
 }
 
 func calculateBoundingBoxesPass(file *os.File, wayNodeRefs [][]int64, totalBlobCount int) [][]float64 {
-
 	// maps node ids to wayNodeRef indexes
 	nodeOwners := make(map[int64][]int, len(wayNodeRefs)*4)
 	for wayIndex, way := range wayNodeRefs {
@@ -468,12 +200,12 @@ func calculateBoundingBoxesPass(file *os.File, wayNodeRefs [][]int64, totalBlobC
 		updateWayBoundingBoxesComplete <- true
 	}()
 
-	blockDataReader := makePrimitiveBlockReader(file)
+	blockDataReader := MakePrimitiveBlockReader(file)
 	for i := 0; i < runtime.NumCPU()*2; i++ {
 		go func() {
 			for data := range blockDataReader {
 				if *data.blobHeader.Type == "OSMData" {
-					blockBytes, err := decodeBlob(data)
+					blockBytes, err := DecodeBlob(data)
 					if err != nil {
 						println("OSMData decode error:", err.Error())
 						os.Exit(6)
@@ -486,7 +218,7 @@ func calculateBoundingBoxesPass(file *os.File, wayNodeRefs [][]int64, totalBlobC
 						os.Exit(6)
 					}
 
-					for node := range makeNodeReader(primitiveBlock) {
+					for node := range MakeNodeReader(primitiveBlock) {
 						owners := nodeOwners[node.GetNodeId()]
 						if owners == nil {
 							continue
@@ -535,12 +267,12 @@ func findNodesWithinBoundingBoxesPass(file *os.File, boundingBoxes [][]float64, 
 		appendNodeComplete <- true
 	}()
 
-	blockDataReader := makePrimitiveBlockReader(file)
+	blockDataReader := MakePrimitiveBlockReader(file)
 	for i := 0; i < runtime.NumCPU()*2; i++ {
 		go func() {
 			for data := range blockDataReader {
 				if *data.blobHeader.Type == "OSMData" {
-					blockBytes, err := decodeBlob(data)
+					blockBytes, err := DecodeBlob(data)
 					if err != nil {
 						println("OSMData decode error:", err.Error())
 						os.Exit(6)
@@ -553,7 +285,7 @@ func findNodesWithinBoundingBoxesPass(file *os.File, boundingBoxes [][]float64, 
 						os.Exit(6)
 					}
 
-					for nodeAbs := range makeNodeReader(primitiveBlock) {
+					for nodeAbs := range MakeNodeReader(primitiveBlock) {
 						lon, lat := nodeAbs.GetLonLat()
 						if isInBoundingBoxes(boundingBoxes, lon, lat) {
 							keys, vals := nodeAbs.GetKeyValues()
@@ -610,12 +342,12 @@ func findWaysUsingNodesPass(file *os.File, nodes []node, totalBlobCount int) []w
 		appendWayComplete <- true
 	}()
 
-	blockDataReader := makePrimitiveBlockReader(file)
+	blockDataReader := MakePrimitiveBlockReader(file)
 	for i := 0; i < runtime.NumCPU()*2; i++ {
 		go func() {
 			for data := range blockDataReader {
 				if *data.blobHeader.Type == "OSMData" {
-					blockBytes, err := decodeBlob(data)
+					blockBytes, err := DecodeBlob(data)
 					if err != nil {
 						println("OSMData decode error:", err.Error())
 						os.Exit(6)
@@ -697,8 +429,8 @@ func findWaysUsingNodesPass(file *os.File, nodes []node, totalBlobCount int) []w
 func findNodesReferencedByWaysPass(file *os.File, ways []way, nodes []node, totalBlobCount int) []node {
 	pending := make(chan bool)
 
-	NODE_REFERENCED := 1
-	NODE_STORED := 2
+	const NODE_REFERENCED = 1
+	const NODE_STORED = 2
 
 	nodeSet := make(map[int64]int, len(nodes))
 
@@ -723,12 +455,12 @@ func findNodesReferencedByWaysPass(file *os.File, ways []way, nodes []node, tota
 		appendNodeComplete <- true
 	}()
 
-	blockDataReader := makePrimitiveBlockReader(file)
+	blockDataReader := MakePrimitiveBlockReader(file)
 	for i := 0; i < runtime.NumCPU()*2; i++ {
 		go func() {
 			for data := range blockDataReader {
 				if *data.blobHeader.Type == "OSMData" {
-					blockBytes, err := decodeBlob(data)
+					blockBytes, err := DecodeBlob(data)
 					if err != nil {
 						println("OSMData decode error:", err.Error())
 						os.Exit(6)
@@ -741,7 +473,7 @@ func findNodesReferencedByWaysPass(file *os.File, ways []way, nodes []node, tota
 						os.Exit(6)
 					}
 
-					for nodeAbs := range makeNodeReader(primitiveBlock) {
+					for nodeAbs := range MakeNodeReader(primitiveBlock) {
 						if nodeSet[nodeAbs.GetNodeId()] == NODE_REFERENCED {
 							lon, lat := nodeAbs.GetLonLat()
 							keys, vals := nodeAbs.GetKeyValues()
@@ -777,63 +509,6 @@ func findNodesReferencedByWaysPass(file *os.File, ways []way, nodes []node, tota
 	}
 
 	return nodes
-}
-
-func writeBlock(file *os.File, block interface{}, blockType string) error {
-	blobContent, err := proto.Marshal(block)
-	if err != nil {
-		return err
-	}
-
-	var blobContentLength int32 = int32(len(blobContent))
-
-	var compressedBlob bytes.Buffer
-	zlibWriter := zlib.NewWriter(&compressedBlob)
-	zlibWriter.Write(blobContent)
-	zlibWriter.Close()
-
-	blob := OSMPBF.Blob{}
-	blob.ZlibData = compressedBlob.Bytes()
-	blob.RawSize = &blobContentLength
-	blobBytes, err := proto.Marshal(&blob)
-	if err != nil {
-		return err
-	}
-
-	var blobBytesLength int32 = int32(len(blobBytes))
-
-	blobHeader := OSMPBF.BlobHeader{}
-	blobHeader.Type = &blockType
-	blobHeader.Datasize = &blobBytesLength
-	blobHeaderBytes, err := proto.Marshal(&blobHeader)
-	if err != nil {
-		return err
-	}
-
-	var blobHeaderLength int32 = int32(len(blobHeaderBytes))
-
-	err = binary.Write(file, binary.BigEndian, blobHeaderLength)
-	if err != nil {
-		return err
-	}
-	_, err = file.Write(blobHeaderBytes)
-	if err != nil {
-		return err
-	}
-	_, err = file.Write(blobBytes)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func writeHeader(file *os.File) error {
-	writingProgram := "go thingy"
-	header := OSMPBF.HeaderBlock{}
-	header.Writingprogram = &writingProgram
-	header.RequiredFeatures = []string{"OsmSchema-V0.6"}
-	return writeBlock(file, &header, "OSMHeader")
 }
 
 func writeNodes(file *os.File, nodes []node) error {
@@ -899,7 +574,7 @@ func writeNodes(file *os.File, nodes []node) error {
 		block := OSMPBF.PrimitiveBlock{}
 		block.Stringtable = &OSMPBF.StringTable{stringTable, nil}
 		block.Primitivegroup = []*OSMPBF.PrimitiveGroup{&group}
-		err := writeBlock(file, &block, "OSMData")
+		err := WriteBlock(file, &block, "OSMData")
 		if err != nil {
 			return err
 		}
@@ -976,7 +651,7 @@ func writeWays(file *os.File, ways []way) error {
 		block := OSMPBF.PrimitiveBlock{}
 		block.Stringtable = &OSMPBF.StringTable{stringTable, nil}
 		block.Primitivegroup = []*OSMPBF.PrimitiveGroup{&group}
-		err := writeBlock(file, &block, "OSMData")
+		err := WriteBlock(file, &block, "OSMData")
 		if err != nil {
 			return err
 		}
@@ -1004,7 +679,7 @@ func main() {
 	// Count the total number of blobs; provides a nice progress indicator
 	totalBlobCount := 0
 	for {
-		blobHeader, err := readNextBlobHeader(file)
+		blobHeader, err := ReadNextBlobHeader(file)
 		if err == io.EOF {
 			break
 		} else if err != nil {
@@ -1052,7 +727,7 @@ func main() {
 	}
 
 	println("Out 1/3: Writing header")
-	err = writeHeader(output)
+	err = WriteHeader(output)
 	if err != nil {
 		println("Output file write error:", err.Error())
 		os.Exit(2)
