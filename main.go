@@ -61,6 +61,96 @@ type way struct {
 	values  []string
 }
 
+type OsmNodeAbstraction interface {
+	GetNodeId() int64
+	GetLonLat() (float64, float64)
+	GetKeyValues() ([]string, []string)
+}
+
+type sparseOsmNode struct {
+	osmPrimitiveBlock *OSMPBF.PrimitiveBlock
+	osmNode           *OSMPBF.Node
+}
+
+type denseOsmNode struct {
+	osmPrimitiveBlock  *OSMPBF.PrimitiveBlock
+	osmDenseNodes      *OSMPBF.DenseNodes
+	nodeId             int64
+	rawLon             int64
+	rawLat             int64
+	startKeyValueIndex int
+	endKeyValueIndex   int
+}
+
+func calculateLonLat(primitiveBlock *OSMPBF.PrimitiveBlock, rawlon int64, rawlat int64) (float64, float64) {
+	var lonOffset int64 = 0
+	var latOffset int64 = 0
+	var granularity int64 = 100
+	if primitiveBlock.LonOffset != nil {
+		lonOffset = *primitiveBlock.LonOffset
+	}
+	if primitiveBlock.LatOffset != nil {
+		latOffset = *primitiveBlock.LatOffset
+	}
+	if primitiveBlock.Granularity != nil {
+		granularity = int64(*primitiveBlock.Granularity)
+	}
+
+	lon := .000000001 * float64(lonOffset+(granularity*rawlon))
+	lat := .000000001 * float64(latOffset+(granularity*rawlat))
+
+	return lon, lat
+}
+
+func NewSparseOsmNode(osmPrimitiveBlock *OSMPBF.PrimitiveBlock, osmNode *OSMPBF.Node) OsmNodeAbstraction {
+	return &sparseOsmNode{osmPrimitiveBlock, osmNode}
+}
+
+func (node *sparseOsmNode) GetNodeId() int64 {
+	return *node.osmNode.Id
+}
+
+func (node *sparseOsmNode) GetLonLat() (float64, float64) {
+	return calculateLonLat(node.osmPrimitiveBlock, *node.osmNode.Lon, *node.osmNode.Lat)
+}
+
+func (node *sparseOsmNode) GetKeyValues() ([]string, []string) {
+	keys := make([]string, len(node.osmNode.Keys))
+	vals := make([]string, len(node.osmNode.Keys))
+	for i, keyIndex := range node.osmNode.Keys {
+		valueIndex := node.osmNode.Vals[i]
+		keys[i] = string(node.osmPrimitiveBlock.Stringtable.S[keyIndex])
+		vals[i] = string(node.osmPrimitiveBlock.Stringtable.S[valueIndex])
+	}
+	return keys, vals
+}
+
+func NewDenseOsmNode(osmPrimitiveBlock *OSMPBF.PrimitiveBlock, osmDenseNodes *OSMPBF.DenseNodes, nodeId int64, rawLon int64, rawLat int64, startKeyValIndex int, endKeyValIndex int) OsmNodeAbstraction {
+	return &denseOsmNode{osmPrimitiveBlock, osmDenseNodes, nodeId, rawLon, rawLat, startKeyValIndex, endKeyValIndex}
+}
+
+func (node *denseOsmNode) GetNodeId() int64 {
+	return node.nodeId
+}
+
+func (node *denseOsmNode) GetLonLat() (float64, float64) {
+	return calculateLonLat(node.osmPrimitiveBlock, node.rawLon, node.rawLat)
+}
+
+func (node *denseOsmNode) GetKeyValues() ([]string, []string) {
+	numItems := 0
+	if len(node.osmDenseNodes.KeysVals) != 0 {
+		numItems = (node.endKeyValueIndex - node.startKeyValueIndex) / 2
+	}
+	keys := make([]string, numItems)
+	vals := make([]string, numItems)
+	for i := 0; i < numItems; i++ {
+		keys[i] = string(node.osmPrimitiveBlock.Stringtable.S[node.osmDenseNodes.KeysVals[node.startKeyValueIndex+(i*2)]])
+		vals[i] = string(node.osmPrimitiveBlock.Stringtable.S[node.osmDenseNodes.KeysVals[node.startKeyValueIndex+(i*2)+1]])
+	}
+	return keys, vals
+}
+
 func readBlock(file io.Reader, size int32) ([]byte, error) {
 	buffer := make([]byte, size)
 	var idx int32 = 0
@@ -146,7 +236,7 @@ func decodeBlob(data blockData) ([]byte, error) {
 	return blobContent, nil
 }
 
-func makePrimitiveBlockReader(file *os.File) chan blockData {
+func makePrimitiveBlockReader(file *os.File) <-chan blockData {
 	retval := make(chan blockData)
 
 	go func() {
@@ -170,6 +260,56 @@ func makePrimitiveBlockReader(file *os.File) chan blockData {
 
 			retval <- blockData{blobHeader, blobBytes, filePosition}
 		}
+		close(retval)
+	}()
+
+	return retval
+}
+
+func makeNodeReader(primitiveBlock *OSMPBF.PrimitiveBlock) <-chan OsmNodeAbstraction {
+	retval := make(chan OsmNodeAbstraction)
+
+	go func() {
+		for _, primitiveGroup := range primitiveBlock.Primitivegroup {
+			for _, osmNode := range primitiveGroup.Nodes {
+				retval <- NewSparseOsmNode(primitiveBlock, osmNode)
+			}
+
+			if primitiveGroup.Dense != nil {
+				var prevNodeId int64 = 0
+				var prevLat int64 = 0
+				var prevLon int64 = 0
+				keyValIndex := 0
+
+				for idx, deltaNodeId := range primitiveGroup.Dense.Id {
+					nodeId := prevNodeId + deltaNodeId
+					rawlon := prevLon + primitiveGroup.Dense.Lon[idx]
+					rawlat := prevLat + primitiveGroup.Dense.Lat[idx]
+
+					prevNodeId = nodeId
+					prevLon = rawlon
+					prevLat = rawlat
+
+					startKeyValIndex := 0
+
+					// Not sure why KeysVals can be length zero, this
+					// doesn't seem to be documented, but I'll assume that
+					// means none of the nodes have data associated with
+					// them.
+					if len(primitiveGroup.Dense.KeysVals) != 0 {
+						startKeyValIndex = keyValIndex
+						for primitiveGroup.Dense.KeysVals[keyValIndex] != 0 {
+							keyValIndex += 2
+						}
+					}
+
+					retval <- NewDenseOsmNode(primitiveBlock, primitiveGroup.Dense, nodeId, rawlon, rawlat, startKeyValIndex, keyValIndex)
+
+					keyValIndex += 1
+				}
+			}
+		}
+
 		close(retval)
 	}()
 
@@ -277,26 +417,6 @@ func findMatchingWaysPass(file *os.File, filterTag string, filterValue string, t
 	return wayNodeRefs
 }
 
-func calculateLongLat(primitiveBlock *OSMPBF.PrimitiveBlock, rawlon int64, rawlat int64) (float64, float64) {
-	var lonOffset int64 = 0
-	var latOffset int64 = 0
-	var granularity int64 = 100
-	if primitiveBlock.LonOffset != nil {
-		lonOffset = *primitiveBlock.LonOffset
-	}
-	if primitiveBlock.LatOffset != nil {
-		latOffset = *primitiveBlock.LatOffset
-	}
-	if primitiveBlock.Granularity != nil {
-		granularity = int64(*primitiveBlock.Granularity)
-	}
-
-	lon := .000000001 * float64(lonOffset+(granularity*rawlon))
-	lat := .000000001 * float64(latOffset+(granularity*rawlat))
-
-	return lon, lat
-}
-
 func isInBoundingBoxes(boundingBoxes [][]float64, lon float64, lat float64) bool {
 	for _, boundingBox := range boundingBoxes {
 		if boundingBox == nil {
@@ -366,42 +486,16 @@ func calculateBoundingBoxesPass(file *os.File, wayNodeRefs [][]int64, totalBlobC
 						os.Exit(6)
 					}
 
-					for _, primitiveGroup := range primitiveBlock.Primitivegroup {
-						for _, node := range primitiveGroup.Nodes {
-							owners := nodeOwners[*node.Id]
-							if owners == nil {
-								continue
-							}
-							lon, lat := calculateLongLat(primitiveBlock, *node.Lon, *node.Lat)
-							for _, wayIndex := range owners {
-								updateWayBoundingBoxes <- boundingBoxUpdate{wayIndex, lon, lat}
-							}
+					for node := range makeNodeReader(primitiveBlock) {
+						owners := nodeOwners[node.GetNodeId()]
+						if owners == nil {
+							continue
+						}
+						lon, lat := node.GetLonLat()
+						for _, wayIndex := range owners {
+							updateWayBoundingBoxes <- boundingBoxUpdate{wayIndex, lon, lat}
 						}
 
-						if primitiveGroup.Dense != nil {
-							var prevNodeId int64 = 0
-							var prevLat int64 = 0
-							var prevLon int64 = 0
-
-							for idx, deltaNodeId := range primitiveGroup.Dense.Id {
-								nodeId := prevNodeId + deltaNodeId
-								rawlon := prevLon + primitiveGroup.Dense.Lon[idx]
-								rawlat := prevLat + primitiveGroup.Dense.Lat[idx]
-
-								prevNodeId = nodeId
-								prevLon = rawlon
-								prevLat = rawlat
-
-								owners := nodeOwners[nodeId]
-								if owners == nil {
-									continue
-								}
-								lon, lat := calculateLongLat(primitiveBlock, rawlon, rawlat)
-								for _, wayIndex := range owners {
-									updateWayBoundingBoxes <- boundingBoxUpdate{wayIndex, lon, lat}
-								}
-							}
-						}
 					}
 				}
 
@@ -459,84 +553,18 @@ func findNodesWithinBoundingBoxesPass(file *os.File, boundingBoxes [][]float64, 
 						os.Exit(6)
 					}
 
-					for _, primitiveGroup := range primitiveBlock.Primitivegroup {
-						for _, osmNode := range primitiveGroup.Nodes {
-
-							lon, lat := calculateLongLat(primitiveBlock, *osmNode.Lon, *osmNode.Lat)
-
-							if isInBoundingBoxes(boundingBoxes, lon, lat) {
-								keys := make([]string, len(osmNode.Keys))
-								vals := make([]string, len(osmNode.Keys))
-								for i, keyIndex := range osmNode.Keys {
-									valueIndex := osmNode.Vals[i]
-									keys[i] = string(primitiveBlock.Stringtable.S[keyIndex])
-									vals[i] = string(primitiveBlock.Stringtable.S[valueIndex])
-								}
-
-								node := node{
-									*osmNode.Id,
-									lon,
-									lat,
-									keys,
-									vals,
-								}
-								appendNode <- node
+					for nodeAbs := range makeNodeReader(primitiveBlock) {
+						lon, lat := nodeAbs.GetLonLat()
+						if isInBoundingBoxes(boundingBoxes, lon, lat) {
+							keys, vals := nodeAbs.GetKeyValues()
+							node := node{
+								nodeAbs.GetNodeId(),
+								lon,
+								lat,
+								keys,
+								vals,
 							}
-						}
-
-						if primitiveGroup.Dense != nil {
-							var prevNodeId int64 = 0
-							var prevLat int64 = 0
-							var prevLon int64 = 0
-							keyValIndex := 0
-
-							for idx, deltaNodeId := range primitiveGroup.Dense.Id {
-								nodeId := prevNodeId + deltaNodeId
-								rawlon := prevLon + primitiveGroup.Dense.Lon[idx]
-								rawlat := prevLat + primitiveGroup.Dense.Lat[idx]
-
-								prevNodeId = nodeId
-								prevLon = rawlon
-								prevLat = rawlat
-
-								startKeyValIndex := 0
-
-								// Not sure why KeysVals can be length zero, this
-								// doesn't seem to be documented, but I'll assume that
-								// means none of the nodes have data associated with
-								// them.
-								if len(primitiveGroup.Dense.KeysVals) != 0 {
-									startKeyValIndex = keyValIndex
-									for primitiveGroup.Dense.KeysVals[keyValIndex] != 0 {
-										keyValIndex += 2
-									}
-								}
-
-								lon, lat := calculateLongLat(primitiveBlock, rawlon, rawlat)
-								if isInBoundingBoxes(boundingBoxes, lon, lat) {
-									numItems := 0
-									if len(primitiveGroup.Dense.KeysVals) != 0 {
-										numItems = (keyValIndex - startKeyValIndex) / 2
-									}
-									keys := make([]string, numItems)
-									vals := make([]string, numItems)
-									for i := 0; i < numItems; i++ {
-										keys[i] = string(primitiveBlock.Stringtable.S[primitiveGroup.Dense.KeysVals[startKeyValIndex+(i*2)]])
-										vals[i] = string(primitiveBlock.Stringtable.S[primitiveGroup.Dense.KeysVals[startKeyValIndex+(i*2)+1]])
-									}
-
-									node := node{
-										nodeId,
-										lon,
-										lat,
-										keys,
-										vals,
-									}
-									appendNode <- node
-								}
-
-								keyValIndex += 1
-							}
+							appendNode <- node
 						}
 					}
 				}
@@ -713,82 +741,18 @@ func findNodesReferencedByWaysPass(file *os.File, ways []way, nodes []node, tota
 						os.Exit(6)
 					}
 
-					for _, primitiveGroup := range primitiveBlock.Primitivegroup {
-						for _, osmNode := range primitiveGroup.Nodes {
-							if nodeSet[*osmNode.Id] == NODE_REFERENCED {
-								lon, lat := calculateLongLat(primitiveBlock, *osmNode.Lon, *osmNode.Lat)
-								keys := make([]string, len(osmNode.Keys))
-								vals := make([]string, len(osmNode.Keys))
-								for i, keyIndex := range osmNode.Keys {
-									valueIndex := osmNode.Vals[i]
-									keys[i] = string(primitiveBlock.Stringtable.S[keyIndex])
-									vals[i] = string(primitiveBlock.Stringtable.S[valueIndex])
-								}
-
-								node := node{
-									*osmNode.Id,
-									lon,
-									lat,
-									keys,
-									vals,
-								}
-								appendNode <- node
+					for nodeAbs := range makeNodeReader(primitiveBlock) {
+						if nodeSet[nodeAbs.GetNodeId()] == NODE_REFERENCED {
+							lon, lat := nodeAbs.GetLonLat()
+							keys, vals := nodeAbs.GetKeyValues()
+							node := node{
+								nodeAbs.GetNodeId(),
+								lon,
+								lat,
+								keys,
+								vals,
 							}
-						}
-
-						if primitiveGroup.Dense != nil {
-							var prevNodeId int64 = 0
-							var prevLat int64 = 0
-							var prevLon int64 = 0
-							keyValIndex := 0
-
-							for idx, deltaNodeId := range primitiveGroup.Dense.Id {
-								nodeId := prevNodeId + deltaNodeId
-								rawlon := prevLon + primitiveGroup.Dense.Lon[idx]
-								rawlat := prevLat + primitiveGroup.Dense.Lat[idx]
-
-								prevNodeId = nodeId
-								prevLon = rawlon
-								prevLat = rawlat
-
-								startKeyValIndex := 0
-
-								// Not sure why KeysVals can be length zero, this
-								// doesn't seem to be documented, but I'll assume that
-								// means none of the nodes have data associated with
-								// them.
-								if len(primitiveGroup.Dense.KeysVals) != 0 {
-									startKeyValIndex = keyValIndex
-									for primitiveGroup.Dense.KeysVals[keyValIndex] != 0 {
-										keyValIndex += 2
-									}
-								}
-
-								if nodeSet[nodeId] == NODE_REFERENCED {
-									lon, lat := calculateLongLat(primitiveBlock, rawlon, rawlat)
-									numItems := 0
-									if len(primitiveGroup.Dense.KeysVals) != 0 {
-										numItems = (keyValIndex - startKeyValIndex) / 2
-									}
-									keys := make([]string, numItems)
-									vals := make([]string, numItems)
-									for i := 0; i < numItems; i++ {
-										keys[i] = string(primitiveBlock.Stringtable.S[primitiveGroup.Dense.KeysVals[startKeyValIndex+(i*2)]])
-										vals[i] = string(primitiveBlock.Stringtable.S[primitiveGroup.Dense.KeysVals[startKeyValIndex+(i*2)+1]])
-									}
-
-									node := node{
-										nodeId,
-										lon,
-										lat,
-										keys,
-										vals,
-									}
-									appendNode <- node
-								}
-
-								keyValIndex += 1
-							}
+							appendNode <- node
 						}
 					}
 				}
