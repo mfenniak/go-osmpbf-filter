@@ -22,6 +22,8 @@ type Blob struct {
 func (this *Blob) Reset()         { *this = Blob{} }
 func (this *Blob) String() string { return proto.CompactTextString(this) }
 
+func (this *Blob) ProtoMessage() {}
+
 type BlobHeader struct {
 	Type             *string `protobuf:"bytes,1,req,name=type" json:"type,omitempty"`
 	Indexdata        []byte  `protobuf:"bytes,2,opt,name=indexdata" json:"indexdata,omitempty"`
@@ -31,6 +33,6 @@ type BlobHeader struct {
 
 func (this *BlobHeader) Reset()         { *this = BlobHeader{} }
 func (this *BlobHeader) String() string { return proto.CompactTextString(this) }
-
+func (this *BlobHeader) ProtoMessage()  {}
 func init() {
 }

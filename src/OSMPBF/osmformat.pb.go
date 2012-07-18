@@ -54,6 +54,7 @@ type HeaderBlock struct {
 
 func (this *HeaderBlock) Reset()         { *this = HeaderBlock{} }
 func (this *HeaderBlock) String() string { return proto.CompactTextString(this) }
+func (this *HeaderBlock) ProtoMessage()  {}
 
 type HeaderBBox struct {
 	Left             *int64 `protobuf:"zigzag64,1,req,name=left" json:"left,omitempty"`
@@ -65,6 +66,7 @@ type HeaderBBox struct {
 
 func (this *HeaderBBox) Reset()         { *this = HeaderBBox{} }
 func (this *HeaderBBox) String() string { return proto.CompactTextString(this) }
+func (this *HeaderBBox) ProtoMessage()  {}
 
 type PrimitiveBlock struct {
 	Stringtable      *StringTable      `protobuf:"bytes,1,req,name=stringtable" json:"stringtable,omitempty"`
@@ -78,6 +80,7 @@ type PrimitiveBlock struct {
 
 func (this *PrimitiveBlock) Reset()         { *this = PrimitiveBlock{} }
 func (this *PrimitiveBlock) String() string { return proto.CompactTextString(this) }
+func (this *PrimitiveBlock) ProtoMessage()  {}
 
 const Default_PrimitiveBlock_Granularity int32 = 100
 const Default_PrimitiveBlock_LatOffset int64 = 0
@@ -95,6 +98,7 @@ type PrimitiveGroup struct {
 
 func (this *PrimitiveGroup) Reset()         { *this = PrimitiveGroup{} }
 func (this *PrimitiveGroup) String() string { return proto.CompactTextString(this) }
+func (this *PrimitiveGroup) ProtoMessage()  {}
 
 type StringTable struct {
 	S                [][]byte `protobuf:"bytes,1,rep,name=s" json:"s,omitempty"`
@@ -103,6 +107,7 @@ type StringTable struct {
 
 func (this *StringTable) Reset()         { *this = StringTable{} }
 func (this *StringTable) String() string { return proto.CompactTextString(this) }
+func (this *StringTable) ProtoMessage()  {}
 
 type Info struct {
 	Version          *int32  `protobuf:"varint,1,opt,name=version,def=-1" json:"version,omitempty"`
@@ -116,6 +121,7 @@ type Info struct {
 
 func (this *Info) Reset()         { *this = Info{} }
 func (this *Info) String() string { return proto.CompactTextString(this) }
+func (this *Info) ProtoMessage()  {}
 
 const Default_Info_Version int32 = -1
 
@@ -131,6 +137,7 @@ type DenseInfo struct {
 
 func (this *DenseInfo) Reset()         { *this = DenseInfo{} }
 func (this *DenseInfo) String() string { return proto.CompactTextString(this) }
+func (this *DenseInfo) ProtoMessage()  {}
 
 type ChangeSet struct {
 	Id               *int64 `protobuf:"varint,1,req,name=id" json:"id,omitempty"`
@@ -139,6 +146,7 @@ type ChangeSet struct {
 
 func (this *ChangeSet) Reset()         { *this = ChangeSet{} }
 func (this *ChangeSet) String() string { return proto.CompactTextString(this) }
+func (this *ChangeSet) ProtoMessage()  {}
 
 type Node struct {
 	Id               *int64   `protobuf:"zigzag64,1,req,name=id" json:"id,omitempty"`
@@ -152,6 +160,7 @@ type Node struct {
 
 func (this *Node) Reset()         { *this = Node{} }
 func (this *Node) String() string { return proto.CompactTextString(this) }
+func (this *Node) ProtoMessage()  {}
 
 type DenseNodes struct {
 	Id               []int64    `protobuf:"zigzag64,1,rep,packed,name=id" json:"id,omitempty"`
@@ -164,6 +173,7 @@ type DenseNodes struct {
 
 func (this *DenseNodes) Reset()         { *this = DenseNodes{} }
 func (this *DenseNodes) String() string { return proto.CompactTextString(this) }
+func (this *DenseNodes) ProtoMessage()  {}
 
 type Way struct {
 	Id               *int64   `protobuf:"varint,1,req,name=id" json:"id,omitempty"`
@@ -176,6 +186,7 @@ type Way struct {
 
 func (this *Way) Reset()         { *this = Way{} }
 func (this *Way) String() string { return proto.CompactTextString(this) }
+func (this *Way) ProtoMessage()  {}
 
 type Relation struct {
 	Id               *int64                `protobuf:"varint,1,req,name=id" json:"id,omitempty"`
@@ -190,6 +201,7 @@ type Relation struct {
 
 func (this *Relation) Reset()         { *this = Relation{} }
 func (this *Relation) String() string { return proto.CompactTextString(this) }
+func (this *Relation) ProtoMessage()  {}
 
 func init() {
 	proto.RegisterEnum("OSMPBF.Relation_MemberType", Relation_MemberType_name, Relation_MemberType_value)

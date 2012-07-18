@@ -152,7 +152,7 @@ func MakePrimitiveBlockReader(file *os.File) <-chan blockData {
 	return retval
 }
 
-func WriteBlock(file *os.File, block interface{}, blockType string) error {
+func WriteBlock(file *os.File, block proto.Message, blockType string) error {
 	blobContent, err := proto.Marshal(block)
 	if err != nil {
 		return err
