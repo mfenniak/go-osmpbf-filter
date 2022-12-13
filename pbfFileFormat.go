@@ -24,7 +24,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"github.com/golang/protobuf/proto"
-	"github.com/philiphil/go-osmpbf-filter/src/OSMPBF"
+	"github.com/mfenniak/go-osmpbf-filter/src/OSMPBF"
 	"io"
 	"os"
 )

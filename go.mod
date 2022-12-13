@@ -1,8 +1,7 @@
-module github.com/philiphil/go-osmpbf-filter
+module github.com/mfenniak/go-osmpbf-filter
 
 go 1.19
 
-require (
-	github.com/golang/protobuf v1.5.2 // indirect
-	google.golang.org/protobuf v1.28.1 // indirect
-)
+require github.com/golang/protobuf v1.5.2
+
+require google.golang.org/protobuf v1.26.0 // indirect
