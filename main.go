@@ -19,9 +19,9 @@
 package main
 
 import (
-	"OSMPBF"
-	"code.google.com/p/goprotobuf/proto"
 	"flag"
+	"github.com/golang/protobuf/proto"
+	"github.com/philiphil/go-osmpbf-filter/src/OSMPBF"
 	"io"
 	"math"
 	"os"
@@ -57,7 +57,6 @@ func supportedFilePass(file *os.File) {
 				println("OSMHeader blob read error:", err.Error())
 				os.Exit(5)
 			}
-
 			header := &OSMPBF.HeaderBlock{}
 			err = proto.Unmarshal(blockBytes, header)
 			if err != nil {

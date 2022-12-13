@@ -19,12 +19,12 @@
 package main
 
 import (
-	"OSMPBF"
 	"bytes"
-	"code.google.com/p/goprotobuf/proto"
 	"compress/zlib"
 	"encoding/binary"
 	"errors"
+	"github.com/golang/protobuf/proto"
+	"github.com/philiphil/go-osmpbf-filter/src/OSMPBF"
 	"io"
 	"os"
 )

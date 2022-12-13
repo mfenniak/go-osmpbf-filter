@@ -3,12 +3,7 @@
 
 package OSMPBF
 
-import proto "code.google.com/p/goprotobuf/proto"
-import "math"
-
-// Reference proto and math imports to suppress error if they are not otherwise used.
-var _ = proto.GetString
-var _ = math.Inf
+import "github.com/golang/protobuf/proto"
 
 type Relation_MemberType int32
 

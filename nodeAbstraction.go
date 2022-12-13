@@ -19,7 +19,7 @@
 package main
 
 import (
-	"OSMPBF"
+	"github.com/philiphil/go-osmpbf-filter/src/OSMPBF"
 )
 
 type OsmNodeAbstraction interface {
